@@ -1483,8 +1483,7 @@ class UdpConnection extends ConnectionBase {
     }
 
     public function readResponse(Command $command) {
-        // TODO: at this stage, Redis does not send back replies with UDP yet.
-        return null;
+        return fread($this->getSocket(), 65536);
     }
 
     public function executeCommand(Command $command) {
@@ -1511,12 +1510,10 @@ class UdpConnection extends ConnectionBase {
     }
 
     public function readBytes($length) {
-        // TODO: at this stage, Redis does not send back replies with UDP yet.
         throw new \RuntimeException('Not yet implemented');
     }
 
     public function readLine() {
-        // TODO: at this stage, Redis does not send back replies with UDP yet.
         throw new \RuntimeException('Not yet implemented');
     }
 }
