@@ -1418,6 +1418,109 @@ class TcpConnection extends ConnectionBase {
     }
 }
 
+class UdpConnection extends ConnectionBase {
+    private $_requestId, $_databaseId, $_authPwd;
+
+    public function __construct(ConnectionParameters $parameters, ResponseReader $reader = null) {
+        $this->_requestId = 0;
+        parent::__construct($parameters, $reader);
+    }
+
+    public function connect() {
+        if ($this->isConnected()) {
+            throw new ClientException('Connection already estabilished');
+        }
+
+        $uri = sprintf('udp://%s:%d/', $this->_params->host, $this->_params->port);
+        $this->_socket = @stream_socket_client(
+            $uri, $errno, $errstr, $this->_params->connection_timeout
+        );
+
+        if (!$this->_socket) {
+            $this->onCommunicationException(trim($errstr), $errno);
+        }
+    }
+
+    public function pushInitCommand(Command $command){
+        $command_id = $command->getCommandId();
+        if ($command_id === 'SELECT') {
+            $this->_database = (string) $command->getArgument(0);
+        }
+        else if ($command_id === 'AUTH') {
+            $this->_authPwd = (string) $command->getArgument(0);
+        }
+        else {
+            throw new \ArgumentException(
+                'Only SELECT and AUTH commands are accepted for UDP connections'
+            );
+        }
+    }
+
+    private function createRequestPacket(Command $command) {
+        $req_flags = 0;
+        $cmd_id = $command->getCommandId();
+        $cmd_argv = $command->getArguments();
+        $cmd_argc = count($cmd_argv) + 1;
+
+        $payload = pack('n', strlen($cmd_id)) . $cmd_id;
+        if (isset($this->_authPwd)) {
+            $cmd_argc++;
+            $payload .= pack('n', strlen($this->_authPwd)) . $this->_authPwd;
+        }
+        foreach ($cmd_argv as $argument) {
+            $strarg = (string) $argument;
+            $payload .= pack('n', strlen($strarg)) . $strarg;
+        }
+
+        $header = pack('NCCnnn', $this->_requestId++, 1, $req_flags, 
+            strlen($payload), $cmd_argc, $this->_databaseId);
+
+        return $header . $payload;
+    }
+
+    public function writeCommand(Command $command) {
+        $this->writeBytes($this->createRequestPacket($command));
+    }
+
+    public function readResponse(Command $command) {
+        // TODO: at this stage, Redis does not send back replies with UDP yet.
+        return null;
+    }
+
+    public function executeCommand(Command $command) {
+        $this->writeCommand($command);
+        if ($command->closesConnection()) {
+            return $this->disconnect();
+        }
+        return $this->readResponse($command);
+    }
+
+    public function writeBytes($value) {
+        $socket = $this->getSocket();
+        while (($length = strlen($value)) > 0) {
+            $written = fwrite($socket, $value);
+            if ($length === $written) {
+                return true;
+            }
+            if ($written === false || $written === 0) {
+                $this->onCommunicationException('Error while writing bytes to the server');
+            }
+            $value = substr($value, $written);
+        }
+        return true;
+    }
+
+    public function readBytes($length) {
+        // TODO: at this stage, Redis does not send back replies with UDP yet.
+        throw new \RuntimeException('Not yet implemented');
+    }
+
+    public function readLine() {
+        // TODO: at this stage, Redis does not send back replies with UDP yet.
+        throw new \RuntimeException('Not yet implemented');
+    }
+}
+
 class ConnectionCluster implements IConnectionCluster, \IteratorAggregate {
     private $_pool, $_distributor;
 
