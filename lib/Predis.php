@@ -1497,7 +1497,12 @@ class UdpConnection extends ConnectionBase {
                 );
             }
 
-            // TODO: need to parse the actual reply header
+            $header = unpack('Nreqid/Copcode/Cflags/npaylen', $replyPacket);
+            if (($header['flags'] & 0x08) === 0x08) {
+                throw new \Predis\ClientException(
+                    "Flag TRUNC set in reply to request ID {$header['reqid']}"
+                );
+            }
 
             $replyData = substr($replyPacket, 8);
             $bufLen = strlen($replyData);
