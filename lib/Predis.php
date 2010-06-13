@@ -3,6 +3,7 @@ namespace Predis;
 
 class PredisException extends \Exception { }
 class ClientException extends PredisException { }                   // Client-side errors
+class AbortedMultiExec extends PredisException { }                  // Aborted multi/exec
 
 class ServerException extends PredisException {                     // Server-side errors
     public function toResponseError() {
@@ -246,9 +247,26 @@ class Client {
         return $block !== null ? $pipeline->execute($block) : $pipeline;
     }
 
-    public function multiExec($multiExecBlock = null) {
-        $multiExec = new MultiExecBlock($this);
-        return $multiExecBlock !== null ? $multiExec->execute($multiExecBlock) : $multiExec;
+    public function multiExec(/* arguments */) {
+        $argv = func_get_args();
+        $argc = func_num_args();
+
+        if ($argc === 0) {
+            return $this->initMultiExec();
+        }
+        else if ($argc === 1) {
+            list($arg0) = $argv;
+            return is_array($arg0) ? $this->initMultiExec($arg0) : $this->initMultiExec(null, $arg0);
+        }
+        else if ($argc === 2) {
+            list($arg0, $arg1) = $argv;
+            return $this->initMultiExec($arg0, $arg1);
+        }
+    }
+
+    private function initMultiExec(Array $options = null, $transBlock = null) {
+        $multi = isset($options) ? new MultiExecBlock($this, $options) : new MultiExecBlock($this);
+        return $transBlock !== null ? $multi->execute($transBlock) : $multi;
     }
 
     public function pubSubContext() {
@@ -432,8 +450,7 @@ abstract class Command {
         $this->_hash = null;
     }
 
-    protected function getArguments() {
-        // TODO: why getArguments is protected?
+    public function getArguments() {
         return isset($this->_arguments) ? $this->_arguments : array();
     }
 
@@ -576,8 +593,9 @@ class ResponseMultiBulkHandler implements IResponseHandler {
         $list = array();
 
         if ($listLength > 0) {
+            $reader = $connection->getResponseReader();
             for ($i = 0; $i < $listLength; $i++) {
-                $list[] = $connection->getResponseReader()->read($connection);
+                $list[] = $reader->read($connection);
             }
         }
 
@@ -769,21 +787,51 @@ class CommandPipeline {
 }
 
 class MultiExecBlock {
-    private $_redisClient, $_commands, $_initialized, $_discarded;
+    private $_initialized, $_discarded, $_insideBlock;
+    private $_redisClient, $_options, $_commands;
+    private $_supportsWatch;
 
-    public function __construct(Client $redisClient) {
+    public function __construct(Client $redisClient, Array $options = null) {
+        $this->checkCapabilities($redisClient);
         $this->_initialized = false;
         $this->_discarded   = false;
+        $this->_insideBlock = false;
         $this->_redisClient = $redisClient;
+        $this->_options     = $options ?: array();
         $this->_commands    = array();
+    }
+
+    private function checkCapabilities(Client $redisClient) {
+        $profile = $redisClient->getProfile();
+        if ($profile->supportsCommands(array('multi', 'exec', 'discard')) === false) {
+            throw new \Predis\ClientException(
+                'The current profile does not support MULTI, EXEC and DISCARD commands'
+            );
+        }
+        $this->_supportsWatch = $profile->supportsCommands(array('watch', 'unwatch'));
+    }
+
+    private function isWatchSupported() {
+        if ($this->_supportsWatch === false) {
+            throw new \Predis\ClientException(
+                'The current profile does not support WATCH and UNWATCH commands'
+            );
+        }
     }
 
     private function initialize() {
         if ($this->_initialized === false) {
+            if (isset($this->_options['watch'])) {
+                $this->watch($this->_options['watch']);
+            }
             $this->_redisClient->multi();
             $this->_initialized = true;
             $this->_discarded   = false;
         }
+    }
+
+    private function setInsideBlock($value) {
+        $this->_insideBlock = $value;
     }
 
     public function __call($method, $arguments) {
@@ -799,6 +847,34 @@ class MultiExecBlock {
         }
     }
 
+    public function watch($keys) {
+        $this->isWatchSupported();
+        if ($this->_initialized === true) {
+            throw new \Predis\ClientException('WATCH inside MULTI is not allowed');
+        }
+
+        $reply = null;
+        if (is_array($keys)) {
+            $reply = array();
+            foreach ($keys as $key) {
+                $reply = $this->_redisClient->watch($keys);
+            }
+        }
+        else {
+            $reply = $this->_redisClient->watch($keys);
+        }
+        return $reply;
+    }
+
+    public function multi() {
+        $this->initialize();
+    }
+
+    public function unwatch() {
+        $this->isWatchSupported();
+        $this->_redisClient->unwatch();
+    }
+
     public function discard() {
         $this->_redisClient->discard();
         $this->_commands    = array();
@@ -806,7 +882,17 @@ class MultiExecBlock {
         $this->_discarded   = true;
     }
 
+    public function exec() {
+        return $this->execute();
+    }
+
     public function execute($block = null) {
+        if ($this->_insideBlock === true) {
+            throw new \Predis\ClientException(
+                "Cannot invoke 'execute' or 'exec' inside an active client transaction block"
+            );
+        }
+
         if ($block && !is_callable($block)) {
             throw new \InvalidArgumentException('Argument passed must be a callable object');
         }
@@ -816,17 +902,21 @@ class MultiExecBlock {
 
         try {
             if ($block !== null) {
+                $this->setInsideBlock(true);
                 $block($this);
+                $this->setInsideBlock(false);
             }
 
             if ($this->_discarded === true) {
                 return;
             }
 
-            $execReply = (($reply = $this->_redisClient->exec()) instanceof \Iterator
-                ? iterator_to_array($reply)
-                : $reply
-            );
+            $reply = $this->_redisClient->exec();
+            if ($reply === null) {
+                throw new AbortedMultiExec('The current transaction has been aborted by the server');
+            }
+
+            $execReply = $reply instanceof \Iterator ? iterator_to_array($reply) : $reply;
             $commands  = &$this->_commands;
             $sizeofReplies = count($execReply);
 
@@ -843,6 +933,7 @@ class MultiExecBlock {
             }
         }
         catch (\Exception $exception) {
+            $this->setInsideBlock(false);
             $blockException = $exception;
         }
 
@@ -874,6 +965,7 @@ class PubSubContext implements \Iterator {
     private $_redisClient, $_subscriptions, $_isStillValid, $_position;
 
     public function __construct(Client $redisClient) {
+        $this->checkCapabilities($redisClient);
         $this->_redisClient   = $redisClient;
         $this->_isStillValid  = true;
         $this->_subscriptions = false;
@@ -883,6 +975,16 @@ class PubSubContext implements \Iterator {
         if ($this->valid()) {
             $this->_redisClient->unsubscribe();
             $this->_redisClient->punsubscribe();
+        }
+    }
+
+    private function checkCapabilities(Client $redisClient) {
+        $profile = $redisClient->getProfile();
+        $commands = array('publish', 'subscribe', 'unsubscribe', 'psubscribe', 'punsubscribe');
+        if ($profile->supportsCommands($commands) === false) {
+            throw new \Predis\ClientException(
+                'The current profile does not support PUB/SUB related commands'
+            );
         }
     }
 
@@ -1442,6 +1544,15 @@ abstract class RedisServerProfile {
         return new $profile();
     }
 
+    public function supportsCommands(Array $commands) {
+        foreach ($commands as $command) {
+            if ($this->supportsCommand($command) === false) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public function supportsCommand($command) {
         return isset($this->_registeredCommands[$command]);
     }
@@ -1719,6 +1830,13 @@ class RedisServer_v2_0 extends RedisServer_v1_2 {
 
 class RedisServer_vNext extends RedisServer_v2_0 {
     public function getVersion() { return '2.1'; }
+    public function getSupportedCommands() {
+        return array_merge(parent::getSupportedCommands(), array(
+            /* transactions */
+            'watch'                     => '\Predis\Commands\Watch',
+            'unwatch'                   => '\Predis\Commands\Unwatch',
+        ));
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1758,7 +1876,6 @@ class StandardExecutor implements IPipelineExecutor {
 
 class SafeExecutor implements IPipelineExecutor {
     public function execute(\Predis\IConnection $connection, &$commands) {
-        $firstServerException = null;
         $sizeofPipe = count($commands);
         $values = array();
 
@@ -1785,9 +1902,6 @@ class SafeExecutor implements IPipelineExecutor {
                 $values[] = $exception->toResponseError();
             }
             catch (\Predis\CommunicationException $exception) {
-                if ($throwExceptions) {
-                    throw $exception;
-                }
                 $toAdd  = count($commands) - count($values);
                 $values = array_merge($values, array_fill(0, $toAdd, $exception));
                 break;
@@ -2685,6 +2799,18 @@ class Exec extends \Predis\MultiBulkCommand {
 class Discard extends \Predis\MultiBulkCommand {
     public function canBeHashed()  { return false; }
     public function getCommandId() { return 'DISCARD'; }
+}
+
+class Watch extends \Predis\MultiBulkCommand {
+    public function canBeHashed()  { return false; }
+    public function getCommandId() { return 'WATCH'; }
+    public function parseResponse($data) { return (bool) $data; }
+}
+
+class Unwatch extends \Predis\MultiBulkCommand {
+    public function canBeHashed()  { return false; }
+    public function getCommandId() { return 'UNWATCH'; }
+    public function parseResponse($data) { return (bool) $data; }
 }
 
 /* publish/subscribe */
