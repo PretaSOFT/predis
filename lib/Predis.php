@@ -1490,7 +1490,7 @@ class UdpConnection extends ConnectionBase {
         $bufLen = &$this->_replyBufL;
 
         if ($bufLen === $bufPos) {
-            $replyPacket = fread($this->getSocket(), 65535);
+            $replyPacket = stream_socket_recvfrom($this->getSocket(), 65535);
             if ($replyPacket === false || $replyPacket === '') {
                 $this->onCommunicationException(
                     'Error while reading bytes from the server'
