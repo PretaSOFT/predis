@@ -1137,6 +1137,9 @@ class ConnectionParameters {
                     case 'weight':
                         $details['weight'] = $v;
                         break;
+                    case 'fallback':
+                        $details['fallback'] = $v;
+                        break;
                 }
             }
             $parsed = array_merge($parsed, $details);
@@ -1162,6 +1165,7 @@ class ConnectionParameters {
             'read_write_timeout' => self::getParamOrDefault($parameters, 'read_write_timeout'), 
             'alias'  => self::getParamOrDefault($parameters, 'alias'), 
             'weight' => self::getParamOrDefault($parameters, 'weight'), 
+            'fallback' => self::getParamOrDefault($parameters, 'fallback'), 
         );
     }
 
@@ -1171,6 +1175,10 @@ class ConnectionParameters {
 
     public function __isset($parameter) {
         return isset($this->_parameters[$parameter]);
+    }
+
+    public function toArray() {
+        return $this->_parameters;
     }
 }
 
@@ -1224,12 +1232,16 @@ class Connection {
         self::$_registeredSchemes[$scheme] = $connectionClass;
     }
 
-    public static function create(ConnectionParameters $parameters, ResponseReader $reader) {
+    public static function getClass($scheme) {
         self::ensureInitialized();
-        if (!isset(self::$_registeredSchemes[$parameters->scheme])) {
-            throw new ClientException("Unknown connection scheme: {$parameters->scheme}");
+        if (!isset(self::$_registeredSchemes[$scheme])) {
+            throw new ClientException("Unknown connection scheme: {$scheme}");
         }
-        $connection = self::$_registeredSchemes[$parameters->scheme];
+        return self::$_registeredSchemes[$scheme];
+    }
+
+    public static function create(ConnectionParameters $parameters, ResponseReader $reader) {
+        $connection = self::getClass($parameters->scheme);
         return new $connection($parameters, $reader);
     }
 }
@@ -1500,6 +1512,7 @@ class UdpConnection extends ConnectionBase {
 
             $header = unpack('Nreqid/Copcode/Cflags/npaylen', $replyPacket);
             if (($header['flags'] & 0x08) === 0x08) {
+                // TODO: change to a more specific exception
                 throw new \Predis\ClientException(
                     "Flag TRUNC set in reply to request ID {$header['reqid']}"
                 );
@@ -1512,12 +1525,31 @@ class UdpConnection extends ConnectionBase {
         }
     }
 
+    private function createFallbackConnection() {
+        $params = $this->_params;
+        $connectionClass = Connection::getClass($params->fallback);
+        $fallbackParams = new ConnectionParameters(array_merge(
+            $params->toArray(), array('scheme' => $params->fallback, 'fallback' => null)
+        ));
+        return new $connectionClass($fallbackParams, $this->_reader);
+    }
+
     public function writeCommand(Command $command) {
         $this->writeBytes($this->createRequestPacket($command));
     }
 
     public function readResponse(Command $command) {
-        $response = $this->_reader->read($this);
+        try {
+            $response = $this->_reader->read($this);
+        }
+        catch (ClientException $exception) {
+            if (!isset($this->_params->fallback)) {
+                throw $exception;
+            }
+            $connection = $this->createFallbackConnection();
+            $connection->writeCommand($command);
+            $response = $this->_reader->read($connection);
+        }
         $skipparse = isset($response->queued) || isset($response->error);
         return $skipparse ? $response : $command->parseResponse($response);
     }
