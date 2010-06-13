@@ -1420,9 +1420,11 @@ class TcpConnection extends ConnectionBase {
 
 class UdpConnection extends ConnectionBase {
     private $_requestId, $_databaseId, $_authPwd;
+    private $_replyBuf, $_replyBufL, $_replyBufP;
 
     public function __construct(ConnectionParameters $parameters, ResponseReader $reader = null) {
         $this->_requestId = 0;
+        $this->resetReplyBuffer();
         parent::__construct($parameters, $reader);
     }
 
@@ -1478,12 +1480,30 @@ class UdpConnection extends ConnectionBase {
         return $header . $payload;
     }
 
+    private function resetReplyBuffer() {
+        $this->_replyBuf  = '';
+        $this->_replyBufL = 0;
+        $this->_replyBufP = 0;
+    }
+
+    private function ensureReplyBuffer() {
+        if ($this->_replyBufL === $this->_replyBufP) {
+            $replyPacket = fread($this->getSocket(), 65535);
+            // TODO: need to parse the actual reply header
+            $this->_replyBuf  = substr($replyPacket, 8);
+            $this->_replyBufL = strlen($this->_replyBuf);
+            $this->_replyBufP = 0;
+        }
+    }
+
     public function writeCommand(Command $command) {
         $this->writeBytes($this->createRequestPacket($command));
     }
 
     public function readResponse(Command $command) {
-        return fread($this->getSocket(), 65536);
+        $response = $this->_reader->read($this);
+        $skipparse = isset($response->queued) || isset($response->error);
+        return $skipparse ? $response : $command->parseResponse($response);
     }
 
     public function executeCommand(Command $command) {
@@ -1510,11 +1530,24 @@ class UdpConnection extends ConnectionBase {
     }
 
     public function readBytes($length) {
-        throw new \RuntimeException('Not yet implemented');
+        if ($length == 0) {
+            throw new \InvalidArgumentException('Length parameter must be greater than 0');
+        }
+        $this->ensureReplyBuffer();
+        $len = $this->_replyBufL > $this->_replyBufP + $length 
+            ? $length 
+            : $this->_replyBufL - $this->_replyBufP;
+        $bytes = substr($this->_replyBuf, $this->_replyBufP, $len);
+        $this->_replyBufP += $len;
+        return $bytes;
     }
 
     public function readLine() {
-        throw new \RuntimeException('Not yet implemented');
+        $this->ensureReplyBuffer();
+        $crlfPos = strpos($this->_replyBuf, Protocol::NEWLINE, $this->_replyBufP);
+        $line = substr($this->_replyBuf, $this->_replyBufP, $crlfPos - $this->_replyBufP);
+        $this->_replyBufP = $crlfPos + 2;
+        return $line;
     }
 }
 
