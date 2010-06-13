@@ -1489,6 +1489,11 @@ class UdpConnection extends ConnectionBase {
     private function ensureReplyBuffer() {
         if ($this->_replyBufL === $this->_replyBufP) {
             $replyPacket = fread($this->getSocket(), 65535);
+            if ($replyPacket === false || $replyPacket === '') {
+                $this->onCommunicationException(
+                    'Error while reading bytes from the server'
+                );
+            }
             // TODO: need to parse the actual reply header
             $this->_replyBuf  = substr($replyPacket, 8);
             $this->_replyBufL = strlen($this->_replyBuf);
