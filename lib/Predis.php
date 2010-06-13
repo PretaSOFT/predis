@@ -1206,6 +1206,7 @@ class Connection {
     private static function getDefaultSchemes() {
         return array(
             'tcp'   => '\Predis\TcpConnection',
+            'udp'   => '\Predis\UdpConnection',
 
             // used for compatibility with older versions of Predis
             'redis' => '\Predis\TcpConnection',
