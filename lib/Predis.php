@@ -1233,13 +1233,62 @@ class Connection {
     }
 }
 
-class TcpConnection implements IConnectionSingle {
-    private $_params, $_socket, $_initCmds, $_reader;
+abstract class ConnectionBase implements IConnectionSingle {
+    protected $_params, $_socket, $_initCmds, $_reader;
 
     public function __construct(ConnectionParameters $parameters, ResponseReader $reader = null) {
-        $this->_params   = $this->checkParameters($parameters);
+        $this->_params   = $parameters;
         $this->_initCmds = array();
         $this->_reader   = $reader ?: new ResponseReader();
+    }
+
+    public function __destruct() {
+        $this->disconnect();
+    }
+
+    public function isConnected() {
+        return is_resource($this->_socket);
+    }
+
+    public function disconnect() {
+        if ($this->isConnected()) {
+            fclose($this->_socket);
+        }
+    }
+
+    public function pushInitCommand(Command $command){
+        $this->_initCmds[] = $command;
+    }
+
+    protected function onCommunicationException($message, $code = null) {
+        Shared\Utils::onCommunicationException(
+            new CommunicationException($this, $message, $code)
+        );
+    }
+
+    public function getSocket() {
+        if (!$this->isConnected()) {
+            $this->connect();
+        }
+        return $this->_socket;
+    }
+
+    public function getResponseReader() {
+        return $this->_reader;
+    }
+
+    public function getParameters() {
+        return $this->_params;
+    }
+
+    public function __toString() {
+        return sprintf('%s:%d', $this->_params->host, $this->_params->port);
+    }
+}
+
+class TcpConnection extends ConnectionBase {
+    public function __construct(ConnectionParameters $parameters, ResponseReader $reader = null) {
+        parent::__construct($this->checkParameters($parameters), $reader);
     }
 
     public function __destruct() {
@@ -1253,10 +1302,6 @@ class TcpConnection implements IConnectionSingle {
             throw new \InvalidArgumentException("Invalid scheme: {$parameters->scheme}");
         }
         return $parameters;
-    }
-
-    public function isConnected() {
-        return is_resource($this->_socket);
     }
 
     public function connect() {
@@ -1290,16 +1335,6 @@ class TcpConnection implements IConnectionSingle {
         }
     }
 
-    public function disconnect() {
-        if ($this->isConnected()) {
-            fclose($this->_socket);
-        }
-    }
-
-    public function pushInitCommand(Command $command){
-        $this->_initCmds[] = $command;
-    }
-
     private function sendInitializationCommands() {
         foreach ($this->_initCmds as $command) {
             $this->writeCommand($command);
@@ -1307,12 +1342,6 @@ class TcpConnection implements IConnectionSingle {
         foreach ($this->_initCmds as $command) {
             $this->readResponse($command);
         }
-    }
-
-    private function onCommunicationException($message, $code = null) {
-        Shared\Utils::onCommunicationException(
-            new CommunicationException($this, $message, $code)
-        );
     }
 
     public function writeCommand(Command $command) {
@@ -1386,25 +1415,6 @@ class TcpConnection implements IConnectionSingle {
         }
         while (substr($value, -2) !== Protocol::NEWLINE);
         return substr($value, 0, -2);
-    }
-
-    public function getSocket() {
-        if (!$this->isConnected()) {
-            $this->connect();
-        }
-        return $this->_socket;
-    }
-
-    public function getResponseReader() {
-        return $this->_reader;
-    }
-
-    public function getParameters() {
-        return $this->_params;
-    }
-
-    public function __toString() {
-        return sprintf('%s:%d', $this->_params->host, $this->_params->port);
     }
 }
 
