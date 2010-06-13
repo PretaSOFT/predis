@@ -1487,17 +1487,23 @@ class UdpConnection extends ConnectionBase {
     }
 
     private function ensureReplyBuffer() {
-        if ($this->_replyBufL === $this->_replyBufP) {
+        $bufPos = &$this->_replyBufP;
+        $bufLen = &$this->_replyBufL;
+
+        if ($bufLen === $bufPos) {
             $replyPacket = fread($this->getSocket(), 65535);
             if ($replyPacket === false || $replyPacket === '') {
                 $this->onCommunicationException(
                     'Error while reading bytes from the server'
                 );
             }
+
             // TODO: need to parse the actual reply header
-            $this->_replyBuf  = substr($replyPacket, 8);
-            $this->_replyBufL = strlen($this->_replyBuf);
-            $this->_replyBufP = 0;
+
+            $replyData = substr($replyPacket, 8);
+            $bufLen = strlen($replyData);
+            $bufPos = 0;
+            $this->_replyBuf = &$replyData;
         }
     }
 
@@ -1539,19 +1545,22 @@ class UdpConnection extends ConnectionBase {
             throw new \InvalidArgumentException('Length parameter must be greater than 0');
         }
         $this->ensureReplyBuffer();
-        $len = $this->_replyBufL > $this->_replyBufP + $length 
-            ? $length 
-            : $this->_replyBufL - $this->_replyBufP;
-        $bytes = substr($this->_replyBuf, $this->_replyBufP, $len);
-        $this->_replyBufP += $len;
+        $bufBuf = &$this->_replyBuf;
+        $bufPos = &$this->_replyBufP;
+        $bufLen = &$this->_replyBufL;
+        $len = $bufLen > $bufPos + $length ? $length : $bufLen - $bufPos;
+        $bytes = substr($bufBuf, $bufPos, $len);
+        $bufPos += $len;
         return $bytes;
     }
 
     public function readLine() {
         $this->ensureReplyBuffer();
-        $crlfPos = strpos($this->_replyBuf, Protocol::NEWLINE, $this->_replyBufP);
-        $line = substr($this->_replyBuf, $this->_replyBufP, $crlfPos - $this->_replyBufP);
-        $this->_replyBufP = $crlfPos + 2;
+        $bufPos = &$this->_replyBufP;
+        $bufBuf = &$this->_replyBuf;
+        $crlfPos = strpos($bufBuf, Protocol::NEWLINE, $bufPos);
+        $line = substr($bufBuf, $bufPos, $crlfPos - $bufPos);
+        $bufPos = $crlfPos + 2;
         return $line;
     }
 }
