@@ -1470,8 +1470,7 @@ class UdpConnection extends ConnectionBase {
             $payload .= pack('n', strlen($this->_authPwd)) . $this->_authPwd;
         }
         foreach ($cmd_argv as $argument) {
-            $strarg = (string) $argument;
-            $payload .= pack('n', strlen($strarg)) . $strarg;
+            $payload .= pack('n', strlen($argument)) . $argument;
         }
 
         $header = pack('NCCnnn', $this->_requestId++, 1, $req_flags, 
