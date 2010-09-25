@@ -29,7 +29,6 @@ class SocketBasedTcpConnection extends TcpConnection {
         // TODO: handle async, persistent, and timeout options
         // $this->_params->connection_async
         // $this->_params->connection_persistent
-        // $this->_params->connection_timeout
         // $this->_params->read_write_timeout
 
         $host = $this->_params->host;
@@ -39,14 +38,38 @@ class SocketBasedTcpConnection extends TcpConnection {
             $host = gethostbyname($host);
         }
 
-        if (@socket_connect($this->_socket, $host, $port) === false) {
-            $this->_socket = null;
-            $this->emitSocketError();
-        }
+        $this->connectWithTimeout($host, $port, $this->_params->connection_timeout);
+        $this->setSocketOptions();
+    }
 
-        if (!socket_set_block($this->_socket)) {
+    private function connectWithTimeout($host, $port, $timeout = 5) {
+        socket_set_nonblock($this->_socket);
+        if (@socket_connect($this->_socket, $host, $port) === false) {
+            $error = socket_last_error();
+            if ($error != SOCKET_EINPROGRESS && $error != SOCKET_EALREADY) {
+                $this->emitSocketError();
+            }
+        }
+        socket_set_block($this->_socket);
+
+        $null = null;
+        $selectable = array($this->_socket);
+        $timeoutSeconds  = floor($timeout);
+        $timeoutUSeconds = ($timeout - $timeoutSeconds) * 1000000;
+
+        $selected = socket_select($selectable, $selectable, $null, $timeoutSeconds, $timeoutUSeconds);
+        if ($selected === 2) {
+            $this->onCommunicationException('Connection refused', SOCKET_ECONNREFUSED);
+        }
+        if ($selected === 0) {
+            $this->onCommunicationException('Connection timed out', SOCKET_ETIMEDOUT);
+        }
+        if ($selected === false) {
             $this->emitSocketError();
         }
+    }
+
+    private function setSocketOptions() {
         if (!socket_set_option($this->_socket, SOL_TCP, TCP_NODELAY, 1)) {
             $this->emitSocketError();
         }
@@ -66,6 +89,7 @@ class SocketBasedTcpConnection extends TcpConnection {
     private function emitSocketError() {
         $errno  = socket_last_error();
         $errstr = socket_strerror($errno);
+        $this->_socket = null;
         $this->onCommunicationException(trim($errstr), $errno);
     }
 
