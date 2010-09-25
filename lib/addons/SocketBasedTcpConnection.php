@@ -20,6 +20,16 @@ namespace Predis;
 //
 
 class SocketBasedTcpConnection extends TcpConnection {
+    protected function checkParameters(ConnectionParameters $parameters) {
+        parent::checkParameters($parameters);
+        if ($parameters->connection_persistent == true) {
+            throw new \InvalidArgumentException(
+                'Persistent connections are not supported by this connection class.'
+            );
+        }
+        return $parameters;
+    }
+
     protected function createResource() {
         $this->_socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
         if (!is_resource($this->_socket)) {
@@ -28,7 +38,6 @@ class SocketBasedTcpConnection extends TcpConnection {
 
         // TODO: handle async, persistent, and timeout options
         // $this->_params->connection_async
-        // $this->_params->connection_persistent
         // $this->_params->read_write_timeout
 
         $host = $this->_params->host;

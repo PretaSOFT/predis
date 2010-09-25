@@ -1292,7 +1292,7 @@ class TcpConnection extends Connection implements IConnectionSingle {
         }
     }
 
-    private function checkParameters(ConnectionParameters $parameters) {
+    protected function checkParameters(ConnectionParameters $parameters) {
         if ($parameters->scheme != 'tcp' && $parameters->scheme != 'redis') {
             throw new \InvalidArgumentException("Invalid scheme: {$parameters->scheme}");
         }
