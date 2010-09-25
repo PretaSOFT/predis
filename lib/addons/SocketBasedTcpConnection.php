@@ -10,6 +10,10 @@ namespace Predis;
 // to obtain appropriate performances in certain scenarios. See Wikipedia for 
 // further information: http://en.wikipedia.org/wiki/Nagle's_algorithm
 //
+// A few options for the underlying resource are not supported by this class:
+//   - connection_persistent (cannot be implemented)
+//   - connection_async (connect operations are forced to be asynchronous)
+// 
 // If you want to use this class to handle TCP connections instead of the 
 // default one you must register it before creating any client instance, just 
 // like in the following example:
@@ -17,6 +21,12 @@ namespace Predis;
 // use Predis;
 // ConnectionFactory::registerScheme('tcp', '\Predis\SocketBasedTcpConnection');
 // $redis = new Client('tcp://127.0.0.1');
+// 
+// Or alternatively:
+// 
+// use Predis;
+// $parameters = new ConnectionParameters('tcp://127.0.0.1');
+// $redis = new Client(new SocketBasedTcpConnection($parameters));
 //
 
 class SocketBasedTcpConnection extends TcpConnection {
@@ -35,9 +45,6 @@ class SocketBasedTcpConnection extends TcpConnection {
         if (!is_resource($this->_socket)) {
             $this->emitSocketError();
         }
-
-        // TODO: handle async, persistent, and timeout options
-        // $this->_params->connection_async
 
         $host = $this->_params->host;
         $port = $this->_params->port;
