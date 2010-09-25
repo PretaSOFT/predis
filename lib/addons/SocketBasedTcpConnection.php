@@ -38,7 +38,6 @@ class SocketBasedTcpConnection extends TcpConnection {
 
         // TODO: handle async, persistent, and timeout options
         // $this->_params->connection_async
-        // $this->_params->read_write_timeout
 
         $host = $this->_params->host;
         $port = $this->_params->port;
@@ -84,6 +83,18 @@ class SocketBasedTcpConnection extends TcpConnection {
         }
         if (!socket_set_option($this->_socket, SOL_SOCKET, SO_REUSEADDR, 1)) {
             $this->emitSocketError();
+        }
+        if (isset($this->_params->read_write_timeout)) {
+            $rwtimeout = $this->_params->read_write_timeout;
+            $timeoutSec  = floor($rwtimeout);
+            $timeoutUsec = ($rwtimeout - $timeoutSec) * 1000000;
+            $timeout = array('sec' => $timeoutSec, 'usec' => $timeoutUsec);
+            if (!socket_set_option($this->_socket, SOL_SOCKET, SO_SNDTIMEO, $timeout)) {
+                $this->emitSocketError();
+            }
+            if (!socket_set_option($this->_socket, SOL_SOCKET, SO_RCVTIMEO, $timeout)) {
+                $this->emitSocketError();
+            }
         }
     }
 
@@ -143,7 +154,7 @@ class SocketBasedTcpConnection extends TcpConnection {
             $chunk_len = 4096;
             // peek ahead (look for Predis\Protocol::NEWLINE)
             $chunk = '';
-            $chunk_res = socket_recv($socket, $chunk, $chunk_len, MSG_PEEK);
+            $chunk_res = @socket_recv($socket, $chunk, $chunk_len, MSG_PEEK);
             if ($chunk_res === false) {
                 $this->onCommunicationException('Error while peeking line from the server');
             } else if ($chunk === '' || is_null($chunk)) {
@@ -154,7 +165,7 @@ class SocketBasedTcpConnection extends TcpConnection {
             }
             // actual recv (with possibly adjusted chunk_len)
             $chunk = '';
-            $chunk_res = socket_recv($socket, $chunk, $chunk_len, 0);
+            $chunk_res = @socket_recv($socket, $chunk, $chunk_len, 0);
             if ($chunk_res === false) {
                 $this->onCommunicationException('Error while reading line from the server');
             } else if ($chunk === '' || is_null($chunk)) {
