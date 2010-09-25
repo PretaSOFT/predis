@@ -25,6 +25,12 @@ v0.7.0 (2010-xx-xx)
     'redis', 'tcp', 'udp' or anything else. Everything is handled by the 
     new Predis\ConnectionFactory class.
 
+  * The new Predis\SocketBasedTcpConnection class (optional - must be required 
+    from the addons directory) is similar to Predis\TcpConnection but it 
+    uses internally socket resources instead of PHP's socket streams. The 
+    peculiarity of this class is in that it allows the use of the TCP_NODELAY 
+    flag, which is enabled by default (ISSUE #10).
+
   * Added the new Predis\ICommand interface. The Predis\Command class now 
     implements this interface that is used in the core bits of Predis.
 
